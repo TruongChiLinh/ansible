@@ -10,5 +10,5 @@ $cfg['Servers'][{{ loop.index }}]['only_db'] = {{ user.dbs | to_json }};
 {% endif %}
 
 {% endfor %}
-// Tắt arbitrary server để bắt buộc chọn từ dropdown
-$cfg['AllowArbitraryServer'] = false;
+// Cho phép nhập server tùy ý
+$cfg['AllowArbitraryServer'] = true;
