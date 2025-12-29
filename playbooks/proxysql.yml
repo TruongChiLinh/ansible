@@ -1,0 +1,6 @@
+---
+- name: Setup ProxySQL
+  hosts: proxy
+  become: yes
+  roles:
+    - proxysql

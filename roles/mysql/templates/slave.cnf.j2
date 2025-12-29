@@ -1,0 +1,9 @@
+[mysqld]
+server-id = {{ mysql_server_id }}
+bind-address = 0.0.0.0
+max_connections = 200
+innodb_buffer_pool_size = 2G
+gtid_mode = ON
+enforce_gtid_consistency = ON
+log-bin = mysql-bin
+binlog-format = ROW

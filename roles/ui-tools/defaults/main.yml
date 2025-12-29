@@ -1,0 +1,9 @@
+---
+phpmyadmin_port: 8081
+minio_port: 9000
+minio_console_port: 9001
+minio_root_user: admin
+minio_root_password: minio123
+redisinsight_port: 8082
+kafka_ui_port: 8083
+semaphore_port: 8084

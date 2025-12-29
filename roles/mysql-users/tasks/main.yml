@@ -1,0 +1,35 @@
+---
+- name: Create databases
+  shell: mysql -h192.168.100.144 -P6033 -uroot -pmysql123 -e "CREATE DATABASE IF NOT EXISTS {{ item }};"
+  loop: "{{ databases }}"
+
+- name: Create users on MySQL master
+  shell: mysql -e "CREATE USER IF NOT EXISTS '{{ item.user }}'@'%' IDENTIFIED WITH mysql_native_password BY '{{ item.pass }}';"
+  loop: "{{ users }}"
+  delegate_to: db-01
+
+- name: Grant permissions on MySQL master
+  shell: |
+    {% if item.dbs[0] == '*' %}
+    mysql -e "GRANT ALL PRIVILEGES ON *.* TO '{{ item.user }}'@'%';"
+    {% else %}
+    {% for db in item.dbs %}
+    {% if item.perm == 'rw' %}
+    mysql -e "GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER ON {{ db }}.* TO '{{ item.user }}'@'%';"
+    {% else %}
+    mysql -e "GRANT SELECT ON {{ db }}.* TO '{{ item.user }}'@'%';"
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+    mysql -e "FLUSH PRIVILEGES;"
+  loop: "{{ users }}"
+  delegate_to: db-01
+
+- name: Add users to ProxySQL
+  shell: |
+    mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "DELETE FROM mysql_users WHERE username='{{ item.user }}';"
+    mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "INSERT INTO mysql_users(username, password, default_hostgroup) VALUES ('{{ item.user }}', '{{ item.pass }}', 0);"
+  loop: "{{ users }}"
+
+- name: Load ProxySQL users to runtime
+  shell: mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "LOAD MYSQL USERS TO RUNTIME; SAVE MYSQL USERS TO DISK;"

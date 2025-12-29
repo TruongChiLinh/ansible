@@ -1,0 +1,11 @@
+broker.id={{ kafka_broker_id }}
+listeners=PLAINTEXT://:{{ kafka_port }}
+advertised.listeners=PLAINTEXT://{{ ansible_host }}:{{ kafka_port }}
+log.dirs={{ kafka_data_dir }}
+num.partitions=3
+default.replication.factor=2
+min.insync.replicas=1
+log.retention.hours=168
+log.segment.bytes=1073741824
+zookeeper.connect={{ zookeeper_connect }}
+zookeeper.connection.timeout.ms=18000

@@ -1,0 +1,5 @@
+---
+- name: Setup Zookeeper
+  hosts: zookeeper
+  roles:
+    - zookeeper

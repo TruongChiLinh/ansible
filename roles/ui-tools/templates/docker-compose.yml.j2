@@ -1,0 +1,114 @@
+version: '3.3'
+
+services:
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: phpmyadmin
+    restart: always
+    ports:
+      - "{{ phpmyadmin_port }}:80"
+    volumes:
+      - /opt/ui-tools/phpmyadmin-config/config.user.inc.php:/etc/phpmyadmin/config.user.inc.php
+    environment:
+      - PMA_ARBITRARY=1
+    networks:
+      - ui-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: always
+    ports:
+      - "{{ minio_port }}:9000"
+      - "{{ minio_console_port }}:9001"
+    environment:
+      - MINIO_ROOT_USER={{ minio_root_user }}
+      - MINIO_ROOT_PASSWORD={{ minio_root_password }}
+    volumes:
+      - /data/minio:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - ui-network
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redisinsight
+    restart: always
+    ports:
+      - "{{ redisinsight_port }}:5540"
+    volumes:
+      -  redisinsight-data:/data
+    networks:
+      - ui-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - /opt/ui-tools/prometheus.yml:/etc/prometheus/prometheus.yml
+      - /data/prometheus:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - ui-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - /data/grafana:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - ui-network
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    restart: always
+    ports:
+      - "{{ kafka_ui_port }}:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=kafka-cluster
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=192.168.100.140:9092,192.168.100.141:9092,192.168.100.142:9092
+      - KAFKA_CLUSTERS_0_ZOOKEEPER=192.168.100.140:2181
+    networks:
+      - ui-network
+
+  semaphore:
+    image: semaphoreui/semaphore:latest
+    container_name: semaphore
+    restart: always
+    user: root
+    ports:
+      - "{{ semaphore_port }}:3000"
+    environment:
+      - SEMAPHORE_DB_DIALECT=bolt
+      - SEMAPHORE_DB_PATH=/data/semaphore.db
+      - SEMAPHORE_PLAYBOOK_PATH=/data/playbooks
+      - SEMAPHORE_ADMIN_PASSWORD=admin
+      - SEMAPHORE_ADMIN_NAME=admin
+      - SEMAPHORE_ADMIN_EMAIL=admin@localhost
+      - SEMAPHORE_ADMIN=admin
+      - SEMAPHORE_ACCESS_KEY_ENCRYPTION=gs72mWZorDIjSgnZp8N0QOzs2Ts+3Rk3j7t40Ca6Jw0=
+      - SEMAPHORE_CONFIG_PATH=/data/config.json
+    volumes:
+      - /data/semaphore:/data
+      - /home/linhtc/infra1:/infra1:ro
+      - /home/linhtc/.ssh:/root/.ssh:ro
+    networks:
+      - ui-network
+
+volumes:
+  redisinsight-data:
+
+networks:
+  ui-network:
+    driver: bridge

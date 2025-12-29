@@ -1,0 +1,18 @@
+---
+- name: Install Redis Sentinel
+  apt:
+    name: redis-sentinel
+    state: present
+
+- name: Configure Sentinel
+  template:
+    src: sentinel.conf.j2
+    dest: /etc/redis/sentinel.conf
+    backup: yes
+  notify: restart sentinel
+
+- name: Start Sentinel
+  systemd:
+    name: redis-sentinel
+    state: started
+    enabled: yes

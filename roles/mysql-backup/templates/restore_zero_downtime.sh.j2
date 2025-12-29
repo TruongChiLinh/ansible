@@ -1,0 +1,103 @@
+#!/bin/bash
+set -e
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 <backup_file>"
+    echo "Example: $0 full_20251226_090439.sql.gz"
+    echo ""
+    echo "Available backups:"
+    ls -lh {{ backup_dir }}/full/ | tail -5
+    exit 1
+fi
+
+BACKUP_FILE=$1
+BACKUP_DIR="{{ backup_dir }}"
+MYSQL_MASTER="192.168.100.135"
+MYSQL_SLAVE="192.168.100.136"
+MYSQL_USER="{{ mysql_user }}"
+MYSQL_PASS="{{ mysql_password }}"
+
+# Find backup file
+if [[ $BACKUP_FILE == /* ]]; then
+    FULL_PATH=$BACKUP_FILE
+else
+    FULL_PATH="$BACKUP_DIR/full/$BACKUP_FILE"
+    if [ ! -f "$FULL_PATH" ]; then
+        FULL_PATH="$BACKUP_DIR/incremental/$BACKUP_FILE"
+    fi
+fi
+
+if [ ! -f "$FULL_PATH" ]; then
+    echo "Error: Backup file not found: $FULL_PATH"
+    exit 1
+fi
+
+echo "=========================================="
+echo "  Zero-Downtime MySQL Restore"
+echo "=========================================="
+echo "Backup file: $BACKUP_FILE"
+echo "Current Master: $MYSQL_MASTER (db-01)"
+echo "Current Slave:  $MYSQL_SLAVE (db-02)"
+echo ""
+read -p "Continue? (yes/no): " confirm
+if [ "$confirm" != "yes" ]; then
+    echo "Aborted."
+    exit 0
+fi
+
+# 1. Stop slave replication
+echo ""
+echo "[1/6] Stopping slave replication..."
+mysql -h$MYSQL_SLAVE -u$MYSQL_USER -p$MYSQL_PASS -e "STOP SLAVE;"
+
+# 2. Restore to Slave
+echo "[2/6] Restoring backup to Slave (db-02)..."
+gunzip < $FULL_PATH | mysql -h$MYSQL_SLAVE -u$MYSQL_USER -p$MYSQL_PASS
+echo "✓ Restore completed"
+
+# 3. Promote Slave to Master
+echo "[3/6] Promoting Slave to Master (switching ProxySQL)..."
+ssh 192.168.100.144 "mysql -h127.0.0.1 -P6032 -uadmin -padmin -e \"
+UPDATE mysql_servers SET hostgroup_id=0 WHERE hostname='$MYSQL_SLAVE';
+UPDATE mysql_servers SET hostgroup_id=1 WHERE hostname='$MYSQL_MASTER';
+LOAD MYSQL SERVERS TO RUNTIME;
+SAVE MYSQL SERVERS TO DISK;\""
+echo "✓ ProxySQL switched: db-02 (136) is now Master"
+
+# 4. Dump from new Master
+echo "[4/6] Dumping from new Master (db-02)..."
+mysqldump -h$MYSQL_SLAVE -u$MYSQL_USER -p$MYSQL_PASS \
+    --all-databases --single-transaction --source-data=2 --set-gtid-purged=OFF \
+    | gzip > /tmp/new_master_sync.sql.gz
+echo "✓ Dump completed"
+
+# 5. Restore to old Master
+echo "[5/6] Syncing old Master (db-01) from new Master..."
+gunzip < /tmp/new_master_sync.sql.gz | mysql -h$MYSQL_MASTER -u$MYSQL_USER -p$MYSQL_PASS
+echo "✓ Sync completed"
+
+# 6. Setup replication
+echo "[6/6] Setting up replication (db-01 -> db-02)..."
+NEW_MASTER_GTID=$(mysql -h$MYSQL_SLAVE -u$MYSQL_USER -p$MYSQL_PASS -Nse "SELECT @@GLOBAL.GTID_EXECUTED;")
+
+mysql -h$MYSQL_MASTER -u$MYSQL_USER -p$MYSQL_PASS -e "STOP SLAVE;"
+mysql -h$MYSQL_MASTER -u$MYSQL_USER -p$MYSQL_PASS -e "RESET MASTER; SET GLOBAL GTID_PURGED='$NEW_MASTER_GTID';"
+mysql -h$MYSQL_MASTER -u$MYSQL_USER -p$MYSQL_PASS -e "CHANGE MASTER TO MASTER_HOST='$MYSQL_SLAVE', MASTER_USER='replicator', MASTER_PASSWORD='repl123', MASTER_AUTO_POSITION=1; START SLAVE;"
+
+# Check replication
+SLAVE_STATUS=$(mysql -h$MYSQL_MASTER -u$MYSQL_USER -p$MYSQL_PASS -e "SHOW SLAVE STATUS\G" | grep -E "Slave_IO_Running|Slave_SQL_Running")
+
+echo ""
+echo "=========================================="
+echo "  Restore Completed Successfully!"
+echo "=========================================="
+echo "New setup:"
+echo "  Master: 192.168.100.136 (db-02)"
+echo "  Slave:  192.168.100.135 (db-01)"
+echo ""
+echo "Replication status:"
+echo "$SLAVE_STATUS"
+echo ""
+echo "To switch back to original setup:"
+echo "  /usr/local/bin/mysql_restore_switchback.sh"
+echo "=========================================="

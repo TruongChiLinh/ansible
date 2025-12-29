@@ -1,0 +1,8 @@
+---
+- name: Setup UI Tools
+  hosts: ui_tools
+  become: yes
+  vars_files:
+    - ../roles/mysql-users/vars/users.yml
+  roles:
+    - ui-tools

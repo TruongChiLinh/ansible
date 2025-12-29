@@ -1,0 +1,12 @@
+---
+backup_dir: /backup/mysql
+retention_days: 30
+mysql_host: 192.168.100.136  # Backup từ Slave
+mysql_user: root
+mysql_password: mysql123
+
+# MinIO config
+minio_endpoint: http://192.168.100.143:9000
+minio_access_key: admin
+minio_secret_key: minio123
+minio_bucket: mysql-backups

@@ -1,0 +1,55 @@
+---
+- name: Set timezone to Asia/Ho_Chi_Minh
+  timezone:
+    name: Asia/Ho_Chi_Minh
+
+- name: Install dependencies
+  apt:
+    name:
+      - mysql-client
+      - wget
+    state: present
+
+- name: Install MinIO client
+  shell: |
+    wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc
+    chmod +x /usr/local/bin/mc
+  args:
+    creates: /usr/local/bin/mc
+
+- name: Create backup directory
+  file:
+    path: "{{ backup_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy backup script
+  template:
+    src: backup.sh.j2
+    dest: /usr/local/bin/mysql_backup.sh
+    mode: '0755'
+
+- name: Copy restore script (zero-downtime)
+  template:
+    src: restore_zero_downtime.sh.j2
+    dest: /usr/local/bin/mysql_restore.sh
+    mode: '0755'
+
+- name: Copy switchback script
+  template:
+    src: restore_switchback.sh.j2
+    dest: /usr/local/bin/mysql_restore_switchback.sh
+    mode: '0755'
+
+- name: Create MinIO bucket
+  shell: |
+    mc alias set myminio {{ minio_endpoint }} {{ minio_access_key }} {{ minio_secret_key }}
+    mc mb -p myminio/{{ minio_bucket }}
+  ignore_errors: yes
+
+- name: Setup cron job - Daily 2AM (Asia/Ho_Chi_Minh)
+  cron:
+    name: "MySQL Backup"
+    minute: "0"
+    hour: "2"
+    job: "TZ='Asia/Ho_Chi_Minh' /usr/local/bin/mysql_backup.sh >> /var/log/mysql_backup.log 2>&1"

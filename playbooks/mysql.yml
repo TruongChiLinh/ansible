@@ -1,0 +1,6 @@
+---
+- name: Setup MySQL Master-Slave
+  hosts: mysql
+  become: yes
+  roles:
+    - mysql

@@ -1,0 +1,5 @@
+---
+- name: Setup Kafka
+  hosts: kafka
+  roles:
+    - kafka

@@ -1,0 +1,48 @@
+#!/bin/bash
+set -e
+
+BACKUP_DIR="{{ backup_dir }}"
+MYSQL_HOST="{{ mysql_host }}"
+MYSQL_USER="{{ mysql_user }}"
+MYSQL_PASS="{{ mysql_password }}"
+DATE=$(date +%Y%m%d_%H%M%S)
+DAY_OF_WEEK=${DAY_OF_WEEK:-$(date +%u)}  # Cho phép override từ bên ngoài
+
+mkdir -p $BACKUP_DIR/{full,incremental}
+
+if [ "$DAY_OF_WEEK" -eq 7 ]; then
+    # Full backup - Chủ nhật
+    BACKUP_FILE="$BACKUP_DIR/full/full_$DATE.sql.gz"
+    mysqldump -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS \
+        --all-databases --single-transaction --routines --triggers --events \
+        --set-gtid-purged=OFF \
+        | gzip > $BACKUP_FILE
+    echo "Full backup: $BACKUP_FILE"
+else
+    # Incremental backup - Thứ 2-7
+    BACKUP_FILE="$BACKUP_DIR/incremental/inc_$DATE.sql.gz"
+    mysqldump -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS \
+        --all-databases --single-transaction \
+        --set-gtid-purged=OFF \
+        | gzip > $BACKUP_FILE
+    echo "Incremental backup: $BACKUP_FILE"
+fi
+
+# Upload MinIO
+mc alias set myminio {{ minio_endpoint }} {{ minio_access_key }} {{ minio_secret_key }}
+mc mb -p myminio/{{ minio_bucket }}
+mc cp $BACKUP_FILE myminio/{{ minio_bucket }}/
+
+# Cleanup local backups
+find $BACKUP_DIR/full -type f -mtime +28 -delete  # Giữ 4 tuần full backup
+find $BACKUP_DIR/incremental -type f -mtime +7 -delete  # Giữ 7 ngày incremental
+
+# Cleanup MinIO backups
+if [ "$DAY_OF_WEEK" -eq 7 ]; then
+    # Xóa full backups cũ hơn 4 tuần trên MinIO
+    mc find myminio/{{ minio_bucket }} --name "full_*" --older-than 28d --exec "mc rm {}"
+    # Xóa tất cả incremental khi có full backup mới
+    mc rm --recursive --force myminio/{{ minio_bucket }}/inc_*
+fi
+
+echo "Done"

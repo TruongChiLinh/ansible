@@ -1,0 +1,58 @@
+---
+- name: Install Docker
+  apt:
+    name:
+      - docker.io
+      - docker-compose
+    state: present
+    update_cache: yes
+
+- name: Start Docker service
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Create docker network
+  docker_network:
+    name: ui-network
+
+- name: Create MinIO data directory
+  file:
+    path: /data/minio
+    state: directory
+    mode: '0755'
+
+- name: Create RedisInsight data directory
+  file:
+    path: /data/redisinsight
+    state: directory
+    mode: '0755'
+
+- name: Create directory for docker-compose
+  file:
+    path: /opt/ui-tools
+    state: directory
+
+- name: Create phpMyAdmin config directory
+  file:
+    path: /opt/ui-tools/phpmyadmin-config
+    state: directory
+
+- name: Create phpMyAdmin config file
+  template:
+    src: config.user.inc.php.j2
+    dest: /opt/ui-tools/phpmyadmin-config/config.user.inc.php
+
+- name: Create docker-compose file
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/ui-tools/docker-compose.yml
+
+- name: Create Prometheus config
+  template:
+    src: prometheus.yml.j2
+    dest: /opt/ui-tools/prometheus.yml
+
+- name: Start UI containers
+  shell: cd /opt/ui-tools && docker-compose up -d

@@ -1,0 +1,15 @@
+[Unit]
+Description=Apache Kafka (KRaft)
+After=network.target
+
+[Service]
+Type=simple
+User=kafka
+Group=kafka
+Environment="KAFKA_OPTS=-javaagent:/opt/kafka/jmx_prometheus_javaagent.jar=7071:/opt/kafka/jmx_exporter.yml"
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

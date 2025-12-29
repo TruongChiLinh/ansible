@@ -1,0 +1,38 @@
+---
+- name: Install Redis
+  apt:
+    name: redis-server
+    state: present
+    update_cache: yes
+
+- name: Backup original Redis config
+  copy:
+    src: /etc/redis/redis.conf
+    dest: /etc/redis/redis.conf.bak
+    remote_src: yes
+    force: no
+
+- name: Configure Redis
+  template:
+    src: redis.conf.j2
+    dest: /etc/redis/redis.conf
+    backup: yes
+
+- name: Configure Redis as Slave
+  lineinfile:
+    path: /etc/redis/redis.conf
+    line: "replicaof {{ redis_master_host }} {{ redis_port }}"
+  when: redis_role == "slave"
+
+- name: Restart Redis
+  systemd:
+    name: redis-server
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+
+- name: Wait for Redis to be ready
+  wait_for:
+    port: "{{ redis_port }}"
+    delay: 2
+    timeout: 30

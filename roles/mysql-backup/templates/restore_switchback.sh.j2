@@ -1,0 +1,66 @@
+#!/bin/bash
+set -e
+
+MYSQL_MASTER="192.168.100.135"
+MYSQL_SLAVE="192.168.100.136"
+MYSQL_USER="{{ mysql_user }}"
+MYSQL_PASS="{{ mysql_password }}"
+
+echo "=========================================="
+echo "  Switch Back to Original Setup"
+echo "=========================================="
+echo "This will switch back:"
+echo "  Master: db-02 (136) -> db-01 (135)"
+echo "  Slave:  db-01 (135) -> db-02 (136)"
+echo ""
+read -p "Continue? (yes/no): " confirm
+if [ "$confirm" != "yes" ]; then
+    echo "Aborted."
+    exit 0
+fi
+
+# 1. Stop slave
+echo ""
+echo "[1/5] Stopping slave replication..."
+mysql -h$MYSQL_MASTER -u$MYSQL_USER -p$MYSQL_PASS -e "STOP SLAVE;"
+
+# 2. Switch ProxySQL back
+echo "[2/5] Switching ProxySQL back to original..."
+ssh 192.168.100.144 "mysql -h127.0.0.1 -P6032 -uadmin -padmin -e \"
+UPDATE mysql_servers SET hostgroup_id=0 WHERE hostname='$MYSQL_MASTER';
+UPDATE mysql_servers SET hostgroup_id=1 WHERE hostname='$MYSQL_SLAVE';
+LOAD MYSQL SERVERS TO RUNTIME;
+SAVE MYSQL SERVERS TO DISK;\""
+echo "✓ ProxySQL switched: db-01 (135) is now Master"
+
+# 3. Dump from new Master
+echo "[3/5] Dumping from Master (db-01)..."
+mysqldump -h$MYSQL_MASTER -u$MYSQL_USER -p$MYSQL_PASS \
+    --all-databases --single-transaction --source-data=2 --set-gtid-purged=OFF \
+    | gzip > /tmp/master_sync.sql.gz
+
+# 4. Restore to Slave
+echo "[4/5] Syncing Slave (db-02)..."
+gunzip < /tmp/master_sync.sql.gz | mysql -h$MYSQL_SLAVE -u$MYSQL_USER -p$MYSQL_PASS
+
+# 5. Setup replication
+echo "[5/5] Setting up replication (db-02 -> db-01)..."
+MASTER_GTID=$(mysql -h$MYSQL_MASTER -u$MYSQL_USER -p$MYSQL_PASS -Nse "SELECT @@GLOBAL.GTID_EXECUTED;")
+
+mysql -h$MYSQL_SLAVE -u$MYSQL_USER -p$MYSQL_PASS -e "RESET MASTER; SET GLOBAL GTID_PURGED='$MASTER_GTID';"
+mysql -h$MYSQL_SLAVE -u$MYSQL_USER -p$MYSQL_PASS -e "CHANGE MASTER TO MASTER_HOST='$MYSQL_MASTER', MASTER_USER='replicator', MASTER_PASSWORD='repl123', MASTER_AUTO_POSITION=1; START SLAVE;"
+
+# Check replication
+SLAVE_STATUS=$(mysql -h$MYSQL_SLAVE -u$MYSQL_USER -p$MYSQL_PASS -e "SHOW SLAVE STATUS\G" | grep -E "Slave_IO_Running|Slave_SQL_Running")
+
+echo ""
+echo "=========================================="
+echo "  Switchback Completed!"
+echo "=========================================="
+echo "Original setup restored:"
+echo "  Master: 192.168.100.135 (db-01)"
+echo "  Slave:  192.168.100.136 (db-02)"
+echo ""
+echo "Replication status:"
+echo "$SLAVE_STATUS"
+echo "=========================================="

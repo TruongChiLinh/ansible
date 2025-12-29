@@ -1,0 +1,6 @@
+---
+- name: Setup MySQL Backup
+  hosts: backup
+  become: yes
+  roles:
+    - mysql-backup

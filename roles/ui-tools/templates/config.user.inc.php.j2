@@ -1,0 +1,14 @@
+<?php
+{% for user in users %}
+// {{ user.user }} - {{ user.dbs | join(', ') }}
+$cfg['Servers'][{{ loop.index }}]['host'] = '192.168.100.144';
+$cfg['Servers'][{{ loop.index }}]['port'] = '6033';
+$cfg['Servers'][{{ loop.index }}]['auth_type'] = 'cookie';
+$cfg['Servers'][{{ loop.index }}]['verbose'] = '{{ user.user }} ({{ user.dbs | join(", ") }})';
+{% if user.dbs[0] != '*' %}
+$cfg['Servers'][{{ loop.index }}]['only_db'] = {{ user.dbs | to_json }};
+{% endif %}
+
+{% endfor %}
+// Tắt arbitrary server để bắt buộc chọn từ dropdown
+$cfg['AllowArbitraryServer'] = false;

@@ -1,0 +1,126 @@
+---
+- name: Install node_exporter
+  apt:
+    deb: https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
+    state: present
+  ignore_errors: yes
+
+- name: Download node_exporter
+  get_url:
+    url: https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
+    dest: /tmp/node_exporter.tar.gz
+
+- name: Extract node_exporter
+  unarchive:
+    src: /tmp/node_exporter.tar.gz
+    dest: /usr/local/bin/
+    remote_src: yes
+    extra_opts: [--strip-components=1]
+
+- name: Create node_exporter service
+  copy:
+    content: |
+      [Unit]
+      Description=Node Exporter
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/node_exporter
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/node_exporter.service
+
+- name: Start node_exporter
+  systemd:
+    name: node_exporter
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Install mysqld_exporter
+  when: "'mysql' in group_names"
+  block:
+    - name: Download mysqld_exporter
+      get_url:
+        url: https://github.com/prometheus/mysqld_exporter/releases/download/v0.15.1/mysqld_exporter-0.15.1.linux-amd64.tar.gz
+        dest: /tmp/mysqld_exporter.tar.gz
+
+    - name: Extract mysqld_exporter
+      unarchive:
+        src: /tmp/mysqld_exporter.tar.gz
+        dest: /usr/local/bin/
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+
+    - name: Create .my.cnf for exporter
+      copy:
+        content: |
+          [client]
+          user=root
+          password=mysql123
+        dest: /root/.mysqld_exporter.cnf
+        mode: '0600'
+
+    - name: Create mysqld_exporter service
+      copy:
+        content: |
+          [Unit]
+          Description=MySQL Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/mysqld_exporter --config.my-cnf=/root/.mysqld_exporter.cnf
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/mysqld_exporter.service
+
+    - name: Start mysqld_exporter
+      systemd:
+        name: mysqld_exporter
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+- name: Install redis_exporter
+  when: "'redis' in group_names"
+  block:
+    - name: Download redis_exporter
+      get_url:
+        url: https://github.com/oliver006/redis_exporter/releases/download/v1.56.0/redis_exporter-v1.56.0.linux-amd64.tar.gz
+        dest: /tmp/redis_exporter.tar.gz
+
+    - name: Extract redis_exporter
+      unarchive:
+        src: /tmp/redis_exporter.tar.gz
+        dest: /usr/local/bin/
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+
+    - name: Create redis_exporter service
+      copy:
+        content: |
+          [Unit]
+          Description=Redis Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/redis_exporter --redis.password=redis123
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/redis_exporter.service
+
+    - name: Start redis_exporter
+      systemd:
+        name: redis_exporter
+        state: started
+        enabled: yes
+        daemon_reload: yes

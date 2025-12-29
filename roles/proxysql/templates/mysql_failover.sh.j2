@@ -1,0 +1,347 @@
+#!/bin/bash
+
+# Usage: ./mysql_failover.sh [maintenance_enable|maintenance_disable|maintenance_status]
+if [ "$1" = "maintenance_enable" ]; then
+    touch /tmp/mysql_maintenance
+    echo "Maintenance mode enabled - failover disabled"
+    exit 0
+elif [ "$1" = "maintenance_disable" ]; then
+    rm -f /tmp/mysql_maintenance
+    echo "Maintenance mode disabled - failover enabled"
+    exit 0
+elif [ "$1" = "maintenance_status" ]; then
+    [ -f /tmp/mysql_maintenance ] && echo "ENABLED" || echo "DISABLED"
+    exit 0
+fi
+
+MASTER_HOST="192.168.100.135"
+SLAVE_HOST="192.168.100.136"
+MYSQL_USER="root"
+MYSQL_PASS="mysql123"
+PROXYSQL_ADMIN="mysql -h127.0.0.1 -P6032 -uadmin -padmin"
+TEAMS_WEBHOOK="https://klbvn.webhook.office.com/webhookb2/c537caf3-ce5e-41cb-89e3-6b502d3df672@14145708-e1ff-4f26-bc77-ddcc06bfbd92/IncomingWebhook/ec94688f2b4f4707a196f54e4174a032/e62702a8-d6d0-4991-b20c-3b6d87755098/V27tgAfYB0SBKDqHapU_wmXwHwsk3mNam44ZyTW3Zlfgc1"
+
+LOG_FILE="/var/log/mysql_failover.log"
+MAINTENANCE_FILE="/tmp/mysql_maintenance"
+FAILOVER_DELAY=30
+
+log() {
+    echo "$(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S %Z') - $1" >> $LOG_FILE
+}
+
+# Check maintenance mode
+if [ -f "$MAINTENANCE_FILE" ]; then
+    log "Maintenance mode active, skipping failover"
+    exit 0
+fi
+
+send_teams_alert() {
+    local message=$1
+    local color=$2
+    local alert_key=$3
+    local alert_file="/tmp/mysql_alert_${alert_key}"
+    
+    # Only send if not already sent
+    if [ -f "$alert_file" ]; then
+        log "Alert already sent for $alert_key, skipping"
+        return
+    fi
+    
+    log "Sending Teams alert: $message"
+    
+    curl -s -H "Content-Type: application/json" -d "{
+        \"@type\": \"MessageCard\",
+        \"themeColor\": \"$color\",
+        \"title\": \"MySQL Cluster Alert\",
+        \"text\": \"$message\",
+        \"sections\": [{
+            \"facts\": [{
+                \"name\": \"Time\",
+                \"value\": \"$(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S %Z')\"
+            },{
+                \"name\": \"Master\",
+                \"value\": \"$MASTER_HOST\"
+            },{
+                \"name\": \"Slave\",
+                \"value\": \"$SLAVE_HOST\"
+            }]
+        }]
+    }" $TEAMS_WEBHOOK
+    
+    touch $alert_file
+    log "Teams alert sent successfully"
+}
+
+clear_alert() {
+    local alert_key=$1
+    local alert_file="/tmp/mysql_alert_${alert_key}"
+    
+    # Send recovery alert if was down before
+    if [ -f "$alert_file" ]; then
+        local node=""
+        case $alert_key in
+            "master_down") node="Master $MASTER_HOST" ;;
+            "slave_down") node="Slave $SLAVE_HOST" ;;
+            "both_down") node="Both nodes" ;;
+        esac
+        
+        if [ -n "$node" ]; then
+            curl -s -H "Content-Type: application/json" -d "{
+                \"@type\": \"MessageCard\",
+                \"themeColor\": \"00FF00\",
+                \"title\": \"MySQL Cluster Alert\",
+                \"text\": \"✅ RECOVERED: $node is back online\",
+                \"sections\": [{
+                    \"facts\": [{
+                        \"name\": \"Time\",
+                        \"value\": \"$(date -u '+%Y-%m-%d %H:%M:%S UTC')\"
+                    }]
+                }]
+            }" $TEAMS_WEBHOOK
+        fi
+        
+        rm -f "$alert_file"
+    fi
+}
+
+check_mysql() {
+    local host=$1
+    mysql -h$host -u$MYSQL_USER -p$MYSQL_PASS -e "SELECT 1" >/dev/null 2>&1
+    return $?
+}
+
+get_current_master() {
+    $PROXYSQL_ADMIN -e "SELECT hostname FROM mysql_servers WHERE hostgroup_id=0 AND status='ONLINE';" -N 2>/dev/null | head -1
+}
+
+auto_fix_replication() {
+    local slave_host=$1
+    local master_host=$2
+
+    log "Auto-fixing replication on $slave_host"
+
+    # Create replicator user with native password
+    mysql -h$master_host -u$MYSQL_USER -p$MYSQL_PASS -e "
+    DROP USER IF EXISTS 'replicator'@'%';
+    CREATE USER 'replicator'@'%' IDENTIFIED WITH mysql_native_password BY 'repl123';
+    GRANT REPLICATION SLAVE ON *.* TO 'replicator'@'%';
+    FLUSH PRIVILEGES;
+    FLUSH HOSTS;" 2>/dev/null
+
+    # Get fresh master position
+    MASTER_LOG_FILE=$(mysql -h$master_host -u$MYSQL_USER -p$MYSQL_PASS -e "SHOW MASTER STATUS\G" 2>/dev/null | grep File | awk '{print $2}')
+    MASTER_LOG_POS=$(mysql -h$master_host -u$MYSQL_USER -p$MYSQL_PASS -e "SHOW MASTER STATUS\G" 2>/dev/null | grep Position | awk '{print $2}')
+
+    # Reset and configure replication with GTID
+    mysql -h$slave_host -u$MYSQL_USER -p$MYSQL_PASS -e "
+    STOP REPLICA;
+    RESET REPLICA ALL;
+    SET GLOBAL read_only=1;
+    CHANGE REPLICATION SOURCE TO 
+        SOURCE_HOST='$master_host',
+        SOURCE_USER='replicator',
+        SOURCE_PASSWORD='repl123',
+        SOURCE_AUTO_POSITION=1;
+    START REPLICA;" 2>/dev/null
+
+    # Auto-fix SQL errors
+    sleep 10
+    for i in {1..3}; do
+        REPLICA_STATUS=$(mysql -h$slave_host -u$MYSQL_USER -p$MYSQL_PASS -e "SHOW REPLICA STATUS\G" 2>/dev/null)
+        IO_RUNNING=$(echo "$REPLICA_STATUS" | grep "Replica_IO_Running" | awk '{print $2}')
+        SQL_RUNNING=$(echo "$REPLICA_STATUS" | grep "Replica_SQL_Running" | awk '{print $2}')
+
+        if [ "$IO_RUNNING" = "Yes" ] && [ "$SQL_RUNNING" = "Yes" ]; then
+            log "Replication fixed successfully on $slave_host"
+            return 0
+        fi
+
+        if [ "$SQL_RUNNING" != "Yes" ]; then
+            log "Skipping SQL errors on $slave_host (attempt $i)"
+            mysql -h$slave_host -u$MYSQL_USER -p$MYSQL_PASS -e "
+            STOP REPLICA SQL_THREAD;
+            SET GLOBAL sql_slave_skip_counter=2;
+            START REPLICA SQL_THREAD;" 2>/dev/null
+            sleep 5
+        fi
+    done
+
+    log "Replication auto-fix completed on $slave_host"
+}
+
+promote_slave_to_master() {
+    log "Promoting slave $SLAVE_HOST to master"
+
+    # Stop slave replication
+    mysql -h$SLAVE_HOST -u$MYSQL_USER -p$MYSQL_PASS -e "STOP REPLICA; RESET REPLICA ALL;" 2>/dev/null
+
+    # Make it writable
+    mysql -h$SLAVE_HOST -u$MYSQL_USER -p$MYSQL_PASS -e "SET GLOBAL read_only=0;" 2>/dev/null
+
+    # Update ProxySQL - Add tested steps for complete failover
+    $PROXYSQL_ADMIN -e "UPDATE mysql_servers SET hostgroup_id=0, status='ONLINE' WHERE hostname='$SLAVE_HOST';" 2>/dev/null
+    $PROXYSQL_ADMIN -e "UPDATE mysql_servers SET hostgroup_id=1, status='OFFLINE_HARD' WHERE hostname='$MASTER_HOST';" 2>/dev/null
+    $PROXYSQL_ADMIN -e "UPDATE mysql_users SET default_hostgroup=0;" 2>/dev/null
+    $PROXYSQL_ADMIN -e "DELETE FROM mysql_query_rules;" 2>/dev/null
+    $PROXYSQL_ADMIN -e "LOAD MYSQL SERVERS TO RUNTIME;" 2>/dev/null
+    $PROXYSQL_ADMIN -e "LOAD MYSQL USERS TO RUNTIME;" 2>/dev/null
+    $PROXYSQL_ADMIN -e "LOAD MYSQL QUERY RULES TO RUNTIME;" 2>/dev/null
+    $PROXYSQL_ADMIN -e "SAVE MYSQL SERVERS TO DISK;" 2>/dev/null
+
+    log "Failover completed: $SLAVE_HOST is now master"
+    log "Sending Teams alert: Failover success"
+    curl -s -H "Content-Type: application/json" -d "{\"@type\":\"MessageCard\",\"themeColor\":\"00FF00\",\"title\":\"MySQL Cluster Alert\",\"text\":\"✅ FAILOVER SUCCESS: New master is $SLAVE_HOST (old master $MASTER_HOST is down)\",\"sections\":[{\"facts\":[{\"name\":\"Time\",\"value\":\"$(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S %Z')\"},{\"name\":\"New Master\",\"value\":\"$SLAVE_HOST\"},{\"name\":\"Old Master\",\"value\":\"$MASTER_HOST\"}]}]}" $TEAMS_WEBHOOK
+    rm -f "/tmp/mysql_alert_master_down"
+}
+
+rejoin_old_master() {
+    local old_master=$1
+    local current_master=$2
+
+    log "Rejoining old master $old_master as slave of $current_master"
+
+    # Auto-fix replication
+    auto_fix_replication $old_master $current_master
+
+    # Update ProxySQL
+    $PROXYSQL_ADMIN -e "
+    UPDATE mysql_servers SET hostgroup_id=1, status='ONLINE' WHERE hostname='$old_master';
+    LOAD MYSQL SERVERS TO RUNTIME;
+    SAVE MYSQL SERVERS TO DISK;" 2>/dev/null
+
+    log "Auto-rejoin completed: $old_master is now slave of $current_master"
+    
+    # Send recovery alert without flag check
+    if [ "$old_master" = "$MASTER_HOST" ]; then
+        log "Sending Teams alert: Master recovered"
+        curl -s -H "Content-Type: application/json" -d "{\"@type\":\"MessageCard\",\"themeColor\":\"00FF00\",\"title\":\"MySQL Cluster Alert\",\"text\":\"✅ RECOVERED: Node $old_master is back online as slave\",\"sections\":[{\"facts\":[{\"name\":\"Time\",\"value\":\"$(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S %Z')\"},{\"name\":\"Master\",\"value\":\"$current_master\"},{\"name\":\"Slave\",\"value\":\"$old_master\"}]}]}" $TEAMS_WEBHOOK
+        rm -f "/tmp/mysql_alert_master_down"
+    else
+        log "Sending Teams alert: Slave recovered"
+        curl -s -H "Content-Type: application/json" -d "{\"@type\":\"MessageCard\",\"themeColor\":\"00FF00\",\"title\":\"MySQL Cluster Alert\",\"text\":\"✅ RECOVERED: Node $old_master is back online as slave\",\"sections\":[{\"facts\":[{\"name\":\"Time\",\"value\":\"$(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S %Z')\"},{\"name\":\"Master\",\"value\":\"$current_master\"},{\"name\":\"Slave\",\"value\":\"$old_master\"}]}]}" $TEAMS_WEBHOOK
+        rm -f "/tmp/mysql_alert_slave_down"
+    fi
+}
+
+# Main logic
+CURRENT_MASTER=$(get_current_master)
+
+# Case 1: 129 is master and down
+if ! check_mysql $MASTER_HOST && [ "$CURRENT_MASTER" = "$MASTER_HOST" ]; then
+    # Check if this is a recent failure (delay before failover)
+    LAST_FAIL_FILE="/tmp/mysql_master_fail_time"
+    CURRENT_TIME=$(date +%s)
+    
+    if [ -f "$LAST_FAIL_FILE" ]; then
+        LAST_FAIL_TIME=$(cat $LAST_FAIL_FILE)
+        TIME_DIFF=$((CURRENT_TIME - LAST_FAIL_TIME))
+        
+        if [ $TIME_DIFF -lt $FAILOVER_DELAY ]; then
+            log "Master failure detected $TIME_DIFF seconds ago, waiting for $FAILOVER_DELAY seconds before failover"
+            exit 0
+        fi
+    else
+        echo $CURRENT_TIME > $LAST_FAIL_FILE
+        log "Master failure detected, starting $FAILOVER_DELAY second delay before failover"
+        exit 0
+    fi
+    
+    log "Master $MASTER_HOST is down, promoting slave $SLAVE_HOST"
+    send_teams_alert "⚠️ WARNING: Master node $MASTER_HOST is DOWN!" "FFA500" "master_down"
+    if check_mysql $SLAVE_HOST; then
+        promote_slave_to_master
+        rm -f $LAST_FAIL_FILE
+    else
+        log "ERROR: Both MySQL nodes are down!"
+        exit 1
+    fi
+# Case 2: 130 is master and down
+elif ! check_mysql $SLAVE_HOST && [ "$CURRENT_MASTER" = "$SLAVE_HOST" ]; then
+    # Check if this is a recent failure (delay before failover)
+    LAST_FAIL_FILE="/tmp/mysql_slave_fail_time"
+    CURRENT_TIME=$(date +%s)
+    
+    if [ -f "$LAST_FAIL_FILE" ]; then
+        LAST_FAIL_TIME=$(cat $LAST_FAIL_FILE)
+        TIME_DIFF=$((CURRENT_TIME - LAST_FAIL_TIME))
+        
+        if [ $TIME_DIFF -lt $FAILOVER_DELAY ]; then
+            log "Master failure detected $TIME_DIFF seconds ago, waiting for $FAILOVER_DELAY seconds before failover"
+            exit 0
+        fi
+    else
+        echo $CURRENT_TIME > $LAST_FAIL_FILE
+        log "Master failure detected, starting $FAILOVER_DELAY second delay before failover"
+        exit 0
+    fi
+    
+    log "Master $SLAVE_HOST is down, failing back to $MASTER_HOST"
+    send_teams_alert "⚠️ WARNING: Master node $SLAVE_HOST is DOWN!" "FFA500" "slave_down"
+    if check_mysql $MASTER_HOST; then
+        mysql -h$MASTER_HOST -u$MYSQL_USER -p$MYSQL_PASS -e "SET GLOBAL read_only=0;" 2>/dev/null
+        $PROXYSQL_ADMIN -e "
+        UPDATE mysql_servers SET hostgroup_id=0, status='ONLINE' WHERE hostname='$MASTER_HOST';
+        UPDATE mysql_servers SET hostgroup_id=1, status='OFFLINE_HARD' WHERE hostname='$SLAVE_HOST';
+        LOAD MYSQL SERVERS TO RUNTIME;
+        SAVE MYSQL SERVERS TO DISK;" 2>/dev/null
+        log "Failback completed: $MASTER_HOST is master again"
+        
+        # Check if alert already sent
+        FAILBACK_ALERT_FILE="/tmp/mysql_failback_alert"
+        if [ ! -f "$FAILBACK_ALERT_FILE" ]; then
+            log "Sending Teams alert: Failback success"
+            curl -s -H "Content-Type: application/json" -d "{\"@type\":\"MessageCard\",\"themeColor\":\"00FF00\",\"title\":\"MySQL Cluster Alert\",\"text\":\"✅ FAILBACK SUCCESS: Master is now $MASTER_HOST (node $SLAVE_HOST is down)\",\"sections\":[{\"facts\":[{\"name\":\"Time\",\"value\":\"$(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S %Z')\"},{\"name\":\"Master\",\"value\":\"$MASTER_HOST\"},{\"name\":\"Slave\",\"value\":\"$SLAVE_HOST\"}]}]}" $TEAMS_WEBHOOK
+            touch $FAILBACK_ALERT_FILE
+        fi
+        rm -f "/tmp/mysql_alert_slave_down" $LAST_FAIL_FILE
+    else
+        log "ERROR: Both MySQL nodes are down!"
+        exit 1
+    fi
+# Case 3: 129 is back, rejoin as slave
+elif check_mysql $MASTER_HOST && [ "$CURRENT_MASTER" = "$SLAVE_HOST" ]; then
+    REPLICA_STATUS=$(mysql -h$MASTER_HOST -u$MYSQL_USER -p$MYSQL_PASS -e "SHOW REPLICA STATUS\G" 2>/dev/null)
+    READ_ONLY=$(mysql -h$MASTER_HOST -u$MYSQL_USER -p$MYSQL_PASS -e "SELECT @@read_only;" -N 2>/dev/null)
+    
+    if [ -z "$REPLICA_STATUS" ] || [ "$READ_ONLY" = "0" ]; then
+        log "Original master $MASTER_HOST is back, rejoining as slave of $SLAVE_HOST"
+        rejoin_old_master $MASTER_HOST $SLAVE_HOST
+    fi
+# Case 4: 130 is back, rejoin as slave
+elif check_mysql $SLAVE_HOST && [ "$CURRENT_MASTER" = "$MASTER_HOST" ] && check_mysql $MASTER_HOST; then
+    REPLICA_STATUS=$(mysql -h$SLAVE_HOST -u$MYSQL_USER -p$MYSQL_PASS -e "SHOW REPLICA STATUS\G" 2>/dev/null)
+    READ_ONLY=$(mysql -h$SLAVE_HOST -u$MYSQL_USER -p$MYSQL_PASS -e "SELECT @@read_only;" -N 2>/dev/null)
+    
+    if [ -z "$REPLICA_STATUS" ] || [ "$READ_ONLY" = "0" ]; then
+        log "Node $SLAVE_HOST is back, rejoining as slave of $MASTER_HOST"
+        rejoin_old_master $SLAVE_HOST $MASTER_HOST
+    fi
+# Case 5: Check node status and alert
+else
+    if ! check_mysql $MASTER_HOST && ! check_mysql $SLAVE_HOST; then
+        # Both nodes down
+        log "CRITICAL: Both MySQL nodes are down!"
+        send_teams_alert "🔴 CRITICAL: Both MySQL nodes ($MASTER_HOST and $SLAVE_HOST) are DOWN! Manual intervention required." "FF0000" "both_down"
+        exit 1
+    elif ! check_mysql $MASTER_HOST && [ "$CURRENT_MASTER" = "$MASTER_HOST" ]; then
+        # Only master down and still active in ProxySQL
+        log "WARNING: Master node $MASTER_HOST is down"
+        send_teams_alert "⚠️ WARNING: Master node $MASTER_HOST is DOWN!" "FFA500" "master_down"
+    elif ! check_mysql $SLAVE_HOST && [ "$CURRENT_MASTER" = "$SLAVE_HOST" ]; then
+        # Only slave down and still active in ProxySQL
+        log "WARNING: Slave node $SLAVE_HOST is down"
+        send_teams_alert "⚠️ WARNING: Slave node $SLAVE_HOST is DOWN!" "FFA500" "slave_down"
+    else
+        # Both nodes up - send recovery if was down before
+        if [ -f "/tmp/mysql_alert_master_down" ]; then
+            log "Sending Teams alert: Master recovered"
+            curl -s -H "Content-Type: application/json" -d "{\"@type\":\"MessageCard\",\"themeColor\":\"00FF00\",\"title\":\"MySQL Cluster Alert\",\"text\":\"✅ RECOVERED: Master $MASTER_HOST is back online\",\"sections\":[{\"facts\":[{\"name\":\"Time\",\"value\":\"$(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S %Z')\"},{\"name\":\"Master\",\"value\":\"$MASTER_HOST\"},{\"name\":\"Slave\",\"value\":\"$SLAVE_HOST\"}]}]}" $TEAMS_WEBHOOK
+        fi
+        if [ -f "/tmp/mysql_alert_slave_down" ]; then
+            log "Sending Teams alert: Slave recovered"
+            curl -s -H "Content-Type: application/json" -d "{\"@type\":\"MessageCard\",\"themeColor\":\"00FF00\",\"title\":\"MySQL Cluster Alert\",\"text\":\"✅ RECOVERED: Slave $SLAVE_HOST is back online\",\"sections\":[{\"facts\":[{\"name\":\"Time\",\"value\":\"$(TZ='Asia/Ho_Chi_Minh' date '+%Y-%m-%d %H:%M:%S %Z')\"},{\"name\":\"Master\",\"value\":\"$MASTER_HOST\"},{\"name\":\"Slave\",\"value\":\"$SLAVE_HOST\"}]}]}" $TEAMS_WEBHOOK
+        fi
+        rm -f /tmp/mysql_alert_master_down /tmp/mysql_alert_slave_down /tmp/mysql_alert_both_down
+        rm -f /tmp/mysql_master_fail_time /tmp/mysql_slave_fail_time /tmp/mysql_failback_alert
+    fi
+fi

@@ -1,0 +1,23 @@
+---
+# Danh sách databases cần tạo
+databases:
+  - db_a
+  - db_b
+  - db_c
+
+# Danh sách users và phân quyền
+users:
+  - user: user_a1
+    pass: pass123
+    dbs: [db_a, db_c]
+    perm: rw
+  
+  - user: user_a2
+    pass: pass456
+    dbs: [db_a, db_b]
+    perm: ro
+  
+  - user: user_admin
+    pass: admin123
+    dbs: ["*"]
+    perm: rw

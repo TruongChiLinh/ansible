@@ -1,0 +1,8 @@
+---
+- name: Create MySQL Users and Databases
+  hosts: proxysql
+  become: yes
+  vars_files:
+    - ../roles/mysql-users/vars/users.yml
+  roles:
+    - mysql-users

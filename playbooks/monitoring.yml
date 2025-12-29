@@ -1,0 +1,6 @@
+---
+- name: Setup Monitoring Exporters
+  hosts: db-01,db-02,redis-01,redis-02,proxysql
+  become: yes
+  roles:
+    - monitoring-exporters

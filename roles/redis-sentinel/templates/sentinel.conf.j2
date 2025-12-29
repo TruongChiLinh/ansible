@@ -1,0 +1,14 @@
+bind 0.0.0.0
+protected-mode no
+port {{ sentinel_port }}
+daemonize yes
+pidfile /run/sentinel/redis-sentinel.pid
+
+sentinel monitor {{ sentinel_master_name }} {{ sentinel_master_host }} {{ sentinel_master_port }} {{ sentinel_quorum }}
+sentinel auth-pass {{ sentinel_master_name }} {{ redis_password }}
+sentinel down-after-milliseconds {{ sentinel_master_name }} {{ sentinel_down_after }}
+sentinel parallel-syncs {{ sentinel_master_name }} {{ sentinel_parallel_syncs }}
+sentinel failover-timeout {{ sentinel_master_name }} {{ sentinel_failover_timeout }}
+
+dir /var/lib/redis
+logfile /var/log/redis/redis-sentinel.log

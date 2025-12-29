@@ -1,0 +1,4 @@
+---
+zookeeper_version: "3.8.3"
+zookeeper_port: 2181
+zookeeper_data_dir: /var/lib/zookeeper
