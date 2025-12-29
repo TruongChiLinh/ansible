@@ -16,7 +16,16 @@ users:
     pass: pass456
     dbs: [db_a, db_b]
     perm: ro
-  
+
+  - user: user_a3
+    pass: pass678
+    dbs: [test_auto]
+    perm: rw
+  - user: user_a4
+    pass: pass679
+    dbs: [test_auto]
+    perm: ro
+    
   - user: user_admin
     pass: admin123
     dbs: ["*"]
