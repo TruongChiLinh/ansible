@@ -29,9 +29,9 @@ else
 fi
 
 # Upload MinIO
-mc alias set myminio {{ minio_endpoint }} {{ minio_access_key }} {{ minio_secret_key }}
-mc mb -p myminio/{{ minio_bucket }}
-mc cp $BACKUP_FILE myminio/{{ minio_bucket }}/
+/usr/local/bin/mc alias set myminio {{ minio_endpoint }} {{ minio_access_key }} {{ minio_secret_key }}
+/usr/local/bin/mc mb -p myminio/{{ minio_bucket }}
+/usr/local/bin/mc cp $BACKUP_FILE myminio/{{ minio_bucket }}/
 
 # Cleanup local backups
 find $BACKUP_DIR/full -type f -mtime +28 -delete  # Giữ 4 tuần full backup
@@ -40,9 +40,9 @@ find $BACKUP_DIR/incremental -type f -mtime +7 -delete  # Giữ 7 ngày incremen
 # Cleanup MinIO backups
 if [ "$DAY_OF_WEEK" -eq 7 ]; then
     # Xóa full backups cũ hơn 4 tuần trên MinIO
-    mc find myminio/{{ minio_bucket }} --name "full_*" --older-than 28d --exec "mc rm {}"
+    /usr/local/bin/mc find myminio/{{ minio_bucket }} --name "full_*" --older-than 28d --exec "/usr/local/bin/mc rm {}"
     # Xóa tất cả incremental khi có full backup mới
-    mc rm --recursive --force myminio/{{ minio_bucket }}/inc_*
+    /usr/local/bin/mc rm --recursive --force myminio/{{ minio_bucket }}/inc_*
 fi
 
 echo "Done"
