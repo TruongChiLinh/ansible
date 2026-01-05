@@ -1,6 +1,6 @@
 ---
-postgresql_version: "16"
-postgresql_data_dir: "/var/lib/postgresql/16/main"
+postgresql_version: "12"
+postgresql_data_dir: "/var/lib/postgresql/12/main"
 postgresql_port: 5432
 patroni_version: "3.3.2"
 patroni_scope: "postgres-cluster"
