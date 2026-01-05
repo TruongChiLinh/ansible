@@ -1,31 +1,30 @@
 ---
-- name: Remove old PostgreSQL repository
+- name: Remove old PostgreSQL repository files
   file:
-    path: /etc/apt/sources.list.d/pgdg.list
+    path: "{{ item }}"
     state: absent
+  loop:
+    - /etc/apt/sources.list.d/pgdg.list
+    - /usr/share/keyrings/postgresql-archive-keyring.gpg
 
 - name: Install prerequisites
   apt:
     name:
       - curl
       - ca-certificates
+      - gnupg
     state: present
     update_cache: yes
 
-- name: Add PostgreSQL APT repository key
-  apt_key:
-    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
-    state: present
-
-- name: Add PostgreSQL repository
-  apt_repository:
-    repo: "deb https://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
-    state: present
-    filename: pgdg
+- name: Install PostgreSQL repository using official script
+  shell: |
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
 
 - name: Update apt cache
   apt:
     update_cache: yes
+    cache_valid_time: 0
 
 - name: Install PostgreSQL and dependencies
   apt:
