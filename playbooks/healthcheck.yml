@@ -108,8 +108,9 @@
       check_mode: yes
       
     - name: Check Kafka broker
-      shell: netstat -tuln | grep 9092
+      shell: ss -tuln | grep 9092
       changed_when: false
+      ignore_errors: yes
       
     - name: Get Kafka broker info
       shell: |
