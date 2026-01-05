@@ -23,7 +23,7 @@ listen postgres_master
     http-check expect status 200
     default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
 {% for host in groups['postgresql'] %}
-    server {{ host }} {{ hostvars[host]['ansible_host'] }}:5432 maxconn 100 check port 8008 http-check send meth GET uri /master
+    server {{ host }} {{ hostvars[host]['ansible_host'] }}:5432 maxconn 100 check port 8008
 {% endfor %}
 
 listen postgres_replicas
@@ -32,5 +32,5 @@ listen postgres_replicas
     http-check expect status 200
     default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
 {% for host in groups['postgresql'] %}
-    server {{ host }} {{ hostvars[host]['ansible_host'] }}:5432 maxconn 100 check port 8008 http-check send meth GET uri /replica
+    server {{ host }} {{ hostvars[host]['ansible_host'] }}:5432 maxconn 100 check port 8008
 {% endfor %}
