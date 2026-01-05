@@ -1,0 +1,4 @@
+---
+haproxy_postgres_port: 5000
+haproxy_postgres_readonly_port: 5001
+haproxy_stats_port: 7000
