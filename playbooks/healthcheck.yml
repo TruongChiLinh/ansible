@@ -1,6 +1,6 @@
 ---
 - name: Health Check - MySQL
-  hosts: mysql_master:mysql_slaves
+  hosts: mysql_master:mysql_slave
   gather_facts: no
   tasks:
     - name: Check MySQL service
@@ -8,7 +8,6 @@
         name: mysql
         state: started
       check_mode: yes
-      register: mysql_status
       
     - name: MySQL connection test
       command: mysql -e "SELECT 1"
@@ -16,11 +15,11 @@
       
     - name: Check replication status (slaves)
       shell: mysql -e "SHOW SLAVE STATUS\G" | grep "Slave_.*_Running"
-      when: inventory_hostname in groups['mysql_slaves']
+      when: inventory_hostname in groups['mysql_slave']
       changed_when: false
 
 - name: Health Check - ProxySQL
-  hosts: proxysql
+  hosts: proxy
   gather_facts: no
   tasks:
     - name: Check ProxySQL service
@@ -34,7 +33,7 @@
       changed_when: false
 
 - name: Health Check - Redis
-  hosts: redis_master:redis_slaves
+  hosts: redis_master:redis_slave
   gather_facts: no
   tasks:
     - name: Check Redis service
