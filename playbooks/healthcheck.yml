@@ -1,0 +1,94 @@
+---
+- name: Health Check - MySQL
+  hosts: mysql_master:mysql_slaves
+  gather_facts: no
+  tasks:
+    - name: Check MySQL service
+      systemd:
+        name: mysql
+        state: started
+      check_mode: yes
+      register: mysql_status
+      
+    - name: MySQL connection test
+      command: mysql -e "SELECT 1"
+      changed_when: false
+      
+    - name: Check replication status (slaves)
+      shell: mysql -e "SHOW SLAVE STATUS\G" | grep "Slave_.*_Running"
+      when: inventory_hostname in groups['mysql_slaves']
+      changed_when: false
+
+- name: Health Check - ProxySQL
+  hosts: proxysql
+  gather_facts: no
+  tasks:
+    - name: Check ProxySQL service
+      systemd:
+        name: proxysql
+        state: started
+      check_mode: yes
+      
+    - name: ProxySQL admin connection
+      command: mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "SELECT 1"
+      changed_when: false
+
+- name: Health Check - Redis
+  hosts: redis_master:redis_slaves
+  gather_facts: no
+  tasks:
+    - name: Check Redis service
+      systemd:
+        name: redis
+        state: started
+      check_mode: yes
+      
+    - name: Redis ping test
+      command: redis-cli ping
+      changed_when: false
+      
+    - name: Check Redis role
+      command: redis-cli role
+      changed_when: false
+
+- name: Health Check - Redis Sentinel
+  hosts: redis_sentinel
+  gather_facts: no
+  tasks:
+    - name: Check Sentinel service
+      systemd:
+        name: redis-sentinel
+        state: started
+      check_mode: yes
+      
+    - name: Sentinel ping test
+      command: redis-cli -p 26379 ping
+      changed_when: false
+
+- name: Health Check - Zookeeper
+  hosts: zookeeper
+  gather_facts: no
+  tasks:
+    - name: Check Zookeeper service
+      systemd:
+        name: zookeeper
+        state: started
+      check_mode: yes
+      
+    - name: Zookeeper status
+      command: /opt/zookeeper/bin/zkServer.sh status
+      changed_when: false
+
+- name: Health Check - Kafka
+  hosts: kafka
+  gather_facts: no
+  tasks:
+    - name: Check Kafka service
+      systemd:
+        name: kafka
+        state: started
+      check_mode: yes
+      
+    - name: Check Kafka broker
+      shell: netstat -tuln | grep 9092
+      changed_when: false
