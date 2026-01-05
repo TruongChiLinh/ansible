@@ -19,7 +19,7 @@ listen stats
 
 listen postgres_master
     bind *:{{ haproxy_postgres_port }}
-    option httpchk
+    option httpchk GET /master
     http-check expect status 200
     default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
 {% for host in groups['postgresql'] %}
@@ -28,7 +28,7 @@ listen postgres_master
 
 listen postgres_replicas
     bind *:{{ haproxy_postgres_readonly_port }}
-    option httpchk
+    option httpchk GET /replica
     http-check expect status 200
     default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
 {% for host in groups['postgresql'] %}
