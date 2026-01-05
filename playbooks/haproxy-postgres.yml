@@ -1,0 +1,5 @@
+---
+- name: Setup HAProxy for PostgreSQL
+  hosts: proxy
+  roles:
+    - haproxy-postgres
