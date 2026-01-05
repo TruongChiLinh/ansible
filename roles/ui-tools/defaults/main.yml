@@ -7,3 +7,6 @@ minio_root_password: minio123
 redisinsight_port: 8082
 kafka_ui_port: 8083
 semaphore_port: 8084
+pgadmin_port: 5050
+pgadmin_email: admin@admin.com
+pgadmin_password: admin
