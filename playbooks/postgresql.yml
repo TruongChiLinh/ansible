@@ -1,0 +1,5 @@
+---
+- name: Setup PostgreSQL HA with Patroni
+  hosts: postgresql
+  roles:
+    - postgresql
