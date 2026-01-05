@@ -1,4 +1,9 @@
 ---
+- name: Remove old PostgreSQL repository
+  file:
+    path: /etc/apt/sources.list.d/pgdg.list
+    state: absent
+
 - name: Install prerequisites
   apt:
     name:
